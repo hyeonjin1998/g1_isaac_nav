@@ -1,0 +1,55 @@
+<!--
+  navigate_through_poses 용 BT — 제자리 회전/후진 복구 없음.
+
+  navigate_to_pose 쪽(navigate_no_spin.xml)과 같은 이유입니다:
+  이 보행 정책은 Spin/BackUp 을 제대로 수행하지 못합니다.
+
+  bt_navigator 는 두 BT 를 모두 로드하므로, 한쪽만 교체하면 through_poses 경로에서
+  여전히 Spin/BackUp 이 호출됩니다. behavior_server 에 해당 서버가 없어 그대로
+  실패하므로 이쪽도 함께 교체합니다.
+-->
+<root main_tree_to_execute="MainTree">
+  <BehaviorTree ID="MainTree">
+    <RecoveryNode number_of_retries="6" name="NavigateRecovery">
+
+      <PipelineSequence name="NavigateWithReplanning">
+        <RateController hz="1.0">
+          <RecoveryNode number_of_retries="1" name="ComputePathThroughPoses">
+            <ReactiveSequence>
+              <RemovePassedGoals input_goals="{goals}" output_goals="{goals}" radius="0.7"/>
+              <ComputePathThroughPoses goals="{goals}" path="{path}" planner_id="GridBased"/>
+            </ReactiveSequence>
+            <ClearEntireCostmap name="ClearGlobalCostmap-Context"
+                                service_name="global_costmap/clear_entirely_global_costmap"/>
+          </RecoveryNode>
+        </RateController>
+
+        <RecoveryNode number_of_retries="1" name="FollowPath">
+          <FollowPath path="{path}" controller_id="FollowPath"/>
+          <ClearEntireCostmap name="ClearLocalCostmap-Context"
+                              service_name="local_costmap/clear_entirely_local_costmap"/>
+        </RecoveryNode>
+      </PipelineSequence>
+
+      <SequenceStar name="RecoveryActions">
+        <ClearEntireCostmap name="ClearGlobalCostmap-Subtree"
+                            service_name="global_costmap/clear_entirely_global_costmap"/>
+        <ClearEntireCostmap name="ClearLocalCostmap-Subtree"
+                            service_name="local_costmap/clear_entirely_local_costmap"/>
+        <!-- 벽에 코를 박고 갇히면 코스트맵을 비워도 경로가 생기지 않습니다.
+             제자리 회전과 후진을 둘 다 막아두면 영영 못 빠져나오므로,
+             **탈출용 후진만** 허용합니다.
+             backup_speed 0.5 는 보행 개시 임계값(0.4) 위여야 실제로 움직입니다
+             — Nav2 기본값 0.025 로는 정책이 명령을 무시합니다.
+             0.5 보다 크게 잡아도 소용없습니다: 정책 학습 범위가 vx∈[-0.5,1.0] 이라
+             set_command 에서 -0.5 로 클램프됩니다.
+             거리는 0.8→0.5 로 줄였습니다. 실측 후진 속도가 명령의 78%(-0.389)라
+             12초 안에 0.8m 를 못 채우고 "Exceeded time allowance" 로 실패했습니다.
+             탈출에는 0.5m 면 충분합니다. -->
+        <BackUp backup_dist="0.5" backup_speed="0.5" time_allowance="20"/>
+        <Wait wait_duration="2.0"/>
+      </SequenceStar>
+
+    </RecoveryNode>
+  </BehaviorTree>
+</root>

@@ -1,0 +1,330 @@
+# Nav2 파라미터 — Unitree G1 (보행 정책 특성 반영)
+#
+# 값의 근거는 전부 Phase 1 실측입니다 (docs/plan.md 참조).
+# 바퀴 로봇 기본값을 그대로 쓰면 로봇이 멈춰 있거나 넘어집니다.
+#
+#   보행 개시 임계값 : vx 0.3 무반응 / 0.5 동작   → 최소 속도를 임계값 위로
+#   제자리 회전      : wz 1.0 에서야 동작, 38% 오차 → 금지 (원호 주행만)
+#   측방 이동        : vy 0.5(학습 최대)에서만 동작 → 비홀로노믹 취급
+#   후진             : −0.4 에서 29% 오차          → 사용 안 함
+#   보행 중 선회     : wz 0.4 에서 10% 오차        → 원호는 정확
+#
+# 측위는 RTAB-Map 이 map→odom 을 발행하므로 AMCL 을 쓰지 않습니다.
+
+bt_navigator:
+  ros__parameters:
+    use_sim_time: true
+    global_frame: map
+    # 보행 진동(pelvis 상하 ±3cm, roll/pitch ±5°)을 배제한 지면 투영 프레임
+    robot_base_frame: base_footprint
+    odom_topic: /odom
+    bt_loop_duration: 10
+    default_server_timeout: 20
+    # default_nav_to_pose_bt_xml 은 launch 파일에서 절대경로로 주입합니다.
+    # (Nav2 는 YAML 안의 $(find-pkg-share ...) 를 치환하지 않습니다 —
+    #  nav2_bringup 은 RewrittenYaml 로 처리하지만 여기서는 launch 에서 직접 넘깁니다.)
+    # Nav2 기본 전체 목록을 유지합니다.
+    # bt_navigator 는 navigate_to_pose 뿐 아니라 navigate_through_poses BT 도
+    # 함께 로드하므로, 목록을 줄이면 쓰지 않는 BT 때문에 활성화가 실패합니다
+    # (실측: 'Node not recognized: RemovePassedGoals' 로 bringup 중단).
+    # Spin/BackUp 노드가 로드되어도 behavior_server 에 해당 서버가 없고
+    # 우리 BT 가 호출하지 않으므로 실제로 실행되지는 않습니다.
+    plugin_lib_names:
+      - nav2_compute_path_to_pose_action_bt_node
+      - nav2_compute_path_through_poses_action_bt_node
+      - nav2_smooth_path_action_bt_node
+      - nav2_follow_path_action_bt_node
+      - nav2_spin_action_bt_node
+      - nav2_wait_action_bt_node
+      - nav2_assisted_teleop_action_bt_node
+      - nav2_back_up_action_bt_node
+      - nav2_drive_on_heading_bt_node
+      - nav2_clear_costmap_service_bt_node
+      - nav2_is_stuck_condition_bt_node
+      - nav2_goal_reached_condition_bt_node
+      - nav2_goal_updated_condition_bt_node
+      - nav2_globally_updated_goal_condition_bt_node
+      - nav2_is_path_valid_condition_bt_node
+      - nav2_initial_pose_received_condition_bt_node
+      - nav2_reinitialize_global_localization_service_bt_node
+      - nav2_rate_controller_bt_node
+      - nav2_distance_controller_bt_node
+      - nav2_speed_controller_bt_node
+      - nav2_truncate_path_action_bt_node
+      - nav2_truncate_path_local_action_bt_node
+      - nav2_goal_updater_node_bt_node
+      - nav2_recovery_node_bt_node
+      - nav2_pipeline_sequence_bt_node
+      - nav2_round_robin_node_bt_node
+      - nav2_transform_available_condition_bt_node
+      - nav2_time_expired_condition_bt_node
+      - nav2_path_expiring_timer_condition
+      - nav2_distance_traveled_condition_bt_node
+      - nav2_single_trigger_bt_node
+      - nav2_goal_updated_controller_bt_node
+      - nav2_is_battery_low_condition_bt_node
+      - nav2_navigate_through_poses_action_bt_node
+      - nav2_navigate_to_pose_action_bt_node
+      - nav2_remove_passed_goals_action_bt_node
+      - nav2_planner_selector_bt_node
+      - nav2_controller_selector_bt_node
+      - nav2_goal_checker_selector_bt_node
+      - nav2_controller_cancel_bt_node
+      - nav2_path_longer_on_approach_bt_node
+      - nav2_wait_cancel_bt_node
+      - nav2_spin_cancel_bt_node
+      - nav2_back_up_cancel_bt_node
+      - nav2_assisted_teleop_cancel_bt_node
+      - nav2_drive_on_heading_cancel_bt_node
+      - nav2_is_battery_charging_condition_bt_node
+
+controller_server:
+  ros__parameters:
+    use_sim_time: true
+    controller_frequency: 20.0
+    # 이 값들은 "정지로 간주하는 하한"입니다. 보행 개시 임계값(0.3~0.5)보다
+    # 낮게 두면 Nav2 가 로봇이 움직인다고 착각합니다.
+    min_x_velocity_threshold: 0.05
+    min_y_velocity_threshold: 0.05
+    min_theta_velocity_threshold: 0.05
+    failure_tolerance: 1.0
+    progress_checker_plugin: progress_checker
+    goal_checker_plugins: [general_goal_checker]
+    controller_plugins: [FollowPath]
+
+    progress_checker:
+      plugin: nav2_controller::SimpleProgressChecker
+      # 보행 로봇은 가속이 느리고 데드밴드가 있어 넉넉히 잡습니다.
+      required_movement_radius: 0.4
+      movement_time_allowance: 20.0
+
+    general_goal_checker:
+      plugin: nav2_controller::SimpleGoalChecker
+      stateful: true
+      # 미세 명령이 무시되므로 정밀 정지가 불가능 → 허용치를 넉넉히
+      xy_goal_tolerance: 0.35
+      # **방위각은 사실상 무시합니다 (3.15 rad ≈ π = 모든 방향 허용).**
+      # use_rotate_to_heading=false 라 로봇이 목표 방위로 정렬할 방법이 없는데
+      # 좁은 yaw 허용치를 걸면 도달 판정이 영원히 나지 않습니다.
+      # 실측: 목표 3m 인데 로봇이 6.1m 주행하며 목표를 통과해 계속 전진
+      #      (yaw 목표 0° vs 진행 방위 180° → 0.50 rad 조건 충족 불가).
+      # 이 정책으로 최종 방위를 지정하려면 별도의 제자리 회전 수단이 필요합니다.
+      yaw_goal_tolerance: 3.15
+
+    FollowPath:
+      plugin: nav2_regulated_pure_pursuit_controller::RegulatedPurePursuitController
+      # RPP 는 원호를 그리며 경로를 따라갑니다 — 제자리 회전을 못 하는
+      # 이 정책의 특성과 정확히 맞습니다.
+      desired_linear_vel: 0.6
+      lookahead_dist: 0.9
+      min_lookahead_dist: 0.6
+      max_lookahead_dist: 1.5
+      lookahead_time: 1.5
+      use_velocity_scaled_lookahead_dist: true
+
+      # 목표 접근 시 감속을 허용합니다.
+      #
+      # 처음엔 0.40 으로 두었으나 이는 Phase 1 측정의 **과잉 적용**이었습니다.
+      # 데드밴드는 "보행 개시"에만 걸리고 (정지 상태에서 걷기 시작할 때),
+      # **이미 걷는 중에는 작은 명령도 잘 추종**합니다 (wz 0.4 단독 무반응 /
+      # vx 0.4 와 함께면 10% 오차로 추종). 감속을 막으면 로봇이 목표에서
+      # 멈추지 못하고 지나쳐 장애물까지 진입합니다 (실측: 목표 3m 인데 6.5m 주행).
+      # 보행 개시 부스트는 GaitCommandShim 이 담당하므로 여기선 감속을 허용합니다.
+      min_approach_linear_velocity: 0.10
+      approach_velocity_scaling_dist: 1.2
+
+      use_regulated_linear_velocity_scaling: true
+      use_cost_regulated_linear_velocity_scaling: true
+      regulated_linear_scaling_min_radius: 0.9
+      # 곡률/비용 규제 시 최소 속도. 보행 유지에 필요한 수준으로만 잡습니다.
+      regulated_linear_scaling_min_speed: 0.25
+
+      # 제자리 회전 금지 — wz 단독은 1.0 에서야 겨우 돌고 38% 오차
+      use_rotate_to_heading: false
+      # 후진 금지 — −0.4 에서 29% 오차
+      allow_reversing: false
+
+      use_collision_detection: true
+      # 1.5초는 과하게 보수적이었습니다 — 속도 0.6 기준 0.9 m 앞까지 투영해
+      # 창고 통로에서 "collision ahead" 가 315건 발생하며 주행이 계속 끊겼습니다.
+      # 0.6 m 투영으로 줄입니다. (충돌 회피 자체는 코스트맵이 담당합니다.)
+      max_allowed_time_to_collision_up_to_carrot: 1.0
+      transform_tolerance: 0.3
+      max_robot_pose_search_dist: 10.0
+
+velocity_smoother:
+  ros__parameters:
+    use_sim_time: true
+    smoothing_frequency: 20.0
+    scale_velocities: false
+    feedback: OPEN_LOOP
+    # 램프 인가가 정책에 무해함은 Phase 1 에서 실측 확인했습니다
+    # (램프 0/0.5/2.0초 모두 동일 거동).
+    max_velocity: [0.8, 0.0, 0.8]
+    # x 하한을 0 으로 두면 **후진이 통째로 죽습니다.** 실측(스무더 단독 테스트):
+    # cmd_vel_nav 에 vx=−0.5 를 넣으면 출력이 0.0 으로 잘려 나갑니다.
+    # behavior_server(BackUp)도 이 스무더를 거치므로, Nav2 가 "후진하라"고 해도
+    # 로봇에는 0 이 갑니다. BackUp 이 주행거리를 검증하는데 실제로 안 움직이니
+    # "Exceeded time allowance" 로 실패합니다 (실측 137~164 회/실행).
+    #
+    # 일반 주행에서 후진이 나올 걱정은 없습니다 — 컨트롤러(RPP)가
+    # allow_reversing:false 라 음수 vx 를 애초에 내지 않습니다. `cmd_vel_nav` 에
+    # 음수를 내는 것은 **BackUp 복구 동작뿐**이고, 그건 통과시켜야 하는 것입니다.
+    # 하한 −0.5 는 정책 학습 범위(lin_vel_x ∈ [−0.5, 1.0])의 하한입니다.
+    min_velocity: [-0.5, 0.0, -0.8]
+    max_accel: [0.5, 0.0, 1.0]
+    max_decel: [-0.8, 0.0, -1.5]
+    odom_topic: /odom
+    odom_duration: 0.1
+    deadband_velocity: [0.0, 0.0, 0.0]
+    velocity_timeout: 1.0
+
+planner_server:
+  ros__parameters:
+    use_sim_time: true
+    expected_planner_frequency: 1.0
+    planner_plugins: [GridBased]
+    GridBased:
+      plugin: nav2_navfn_planner/NavfnPlanner
+      tolerance: 0.5
+      use_astar: true
+      allow_unknown: true
+
+behavior_server:
+  ros__parameters:
+    use_sim_time: true
+    local_frame: odom
+    global_frame: map
+    robot_base_frame: base_footprint
+    transform_tolerance: 0.3
+    cycle_frequency: 10.0
+    # Spin 은 등록하지 않습니다 — 제자리 회전은 wz 1.0 에서야 겨우 돌고 38% 오차입니다.
+    #
+    # BackUp 은 **탈출 전용으로만** 등록합니다.
+    # 후진은 −0.4 에서 −0.284, −0.5 에서 −0.389 로 22~29% 오차라 일반 주행에는
+    # 부적합하지만(그래서 allow_reversing=false 유지), 벽에 코를 박고 갇혔을 때는
+    # 부정확한 후진이라도 없는 것보다 낫습니다. 제자리 회전과 후진을 둘 다 막으면
+    # 한번 고착된 로봇이 영영 빠져나오지 못합니다.
+    behavior_plugins: [wait, backup]
+    wait:
+      plugin: nav2_behaviors/Wait
+    backup:
+      plugin: nav2_behaviors/BackUp
+    # BackUp 은 후진 경로를 미리 투영해 충돌을 검사합니다. 기본 2.0초는 투영 지점이
+    # 국소 코스트맵(rolling window) 밖으로 나가 "Pose Goes Off Grid → Collision Ahead"
+    # 로 실패했습니다 (실측). 투영 구간을 줄여 그리드 안에 머물게 합니다.
+    simulate_ahead_time: 1.0
+
+global_costmap:
+  global_costmap:
+    ros__parameters:
+      use_sim_time: true
+      global_frame: map
+      robot_base_frame: base_footprint
+      update_frequency: 1.0
+      publish_frequency: 1.0
+      resolution: 0.05
+      track_unknown_space: true
+      # G1 어깨폭 ≈ 0.45 m + 보행 중 좌우 흔들림 여유
+      robot_radius: 0.30
+      plugins: [static_layer, obstacle_layer, inflation_layer]
+
+      static_layer:
+        plugin: nav2_costmap_2d::StaticLayer
+        map_subscribe_transient_local: true
+        # RTAB-Map 이 발행하는 격자
+        map_topic: /map
+
+      obstacle_layer:
+        plugin: nav2_costmap_2d::ObstacleLayer
+        enabled: true
+        observation_sources: lidar depth
+        # MID-360: 벽·기둥 등 원거리 장애물 담당.
+        # 하단 빔이 −7° 라 지면과는 16 m 밖에서 만나 바닥 오검출이 거의 없습니다.
+        lidar:
+          topic: /mid360/points
+          data_type: PointCloud2
+          marking: true
+          clearing: true
+          obstacle_max_range: 8.0
+          obstacle_min_range: 0.3
+          raytrace_max_range: 10.0
+          raytrace_min_range: 0.3
+          min_obstacle_height: 0.10
+          max_obstacle_height: 1.80
+        # D435i: 아래 47.6° 를 봐서 지면 0.49~2.57 m 구간을 커버.
+        # 라이다가 못 보는 **근거리 바닥 장애물**을 메웁니다.
+        depth:
+          topic: /camera/depth/points
+          data_type: PointCloud2
+          marking: true
+          clearing: true
+          obstacle_max_range: 3.0
+          obstacle_min_range: 0.2
+          raytrace_max_range: 3.5
+          raytrace_min_range: 0.2
+          # 바닥 자체를 장애물로 찍지 않도록 하한을 둡니다.
+          # 보행 중 pelvis 가 ±3cm 진동하므로 여유를 줍니다.
+          min_obstacle_height: 0.12
+          max_obstacle_height: 1.80
+
+      inflation_layer:
+        plugin: nav2_costmap_2d::InflationLayer
+        # **경사를 완만하게, 반경을 넓게** — 경로가 통로 중앙을 지나게 만듭니다.
+        #
+        # 0.75 + scaling 3.0 은 벽 주변이 급격히 고비용이라 시각적으로 장애물처럼
+        # 보였고, 0.45 로 줄이니 이번엔 경로가 벽에 붙어 지나가 고착이 잦았습니다.
+        # 반경은 넓히되 scaling 을 낮춰 **완만한 경사**를 만들면, 벽 근처가 lethal 이
+        # 되지 않으면서도 플래너가 중앙을 선호합니다.
+        # (lethal 판정은 inflation_radius 가 아니라 robot_radius 0.30 이 정합니다.)
+        cost_scaling_factor: 1.8
+        inflation_radius: 0.85
+
+local_costmap:
+  local_costmap:
+    ros__parameters:
+      use_sim_time: true
+      global_frame: odom
+      robot_base_frame: base_footprint
+      update_frequency: 5.0
+      publish_frequency: 2.0
+      rolling_window: true
+      # BackUp 의 후진 투영이 그리드를 벗어나지 않도록 8→10 m 로 넓혔습니다.
+      width: 10
+      height: 10
+      resolution: 0.05
+      robot_radius: 0.30
+      plugins: [obstacle_layer, inflation_layer]
+
+      obstacle_layer:
+        plugin: nav2_costmap_2d::ObstacleLayer
+        enabled: true
+        observation_sources: lidar depth
+        lidar:
+          topic: /mid360/points
+          data_type: PointCloud2
+          marking: true
+          clearing: true
+          obstacle_max_range: 8.0
+          obstacle_min_range: 0.3
+          raytrace_max_range: 10.0
+          raytrace_min_range: 0.3
+          min_obstacle_height: 0.10
+          max_obstacle_height: 1.80
+        depth:
+          topic: /camera/depth/points
+          data_type: PointCloud2
+          marking: true
+          clearing: true
+          obstacle_max_range: 3.0
+          obstacle_min_range: 0.2
+          raytrace_max_range: 3.5
+          raytrace_min_range: 0.2
+          min_obstacle_height: 0.12
+          max_obstacle_height: 1.80
+
+      inflation_layer:
+        plugin: nav2_costmap_2d::InflationLayer
+        # 전역과 동일한 완만·광역 경사 (통로 중앙 선호)
+        cost_scaling_factor: 1.8
+        inflation_radius: 0.85

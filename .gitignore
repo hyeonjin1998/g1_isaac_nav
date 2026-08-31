@@ -1,0 +1,29 @@
+# --- ROS 2 워크스페이스 빌드 산출물 ---
+ros2_ws/build/
+ros2_ws/install/
+ros2_ws/log/
+
+# --- 맵 / 로그 데이터 ---
+# RTAB-Map DB 는 수백 MB~수 GB 라 GitHub 파일당 100 MB 제한을 넘습니다.
+# 재생성 방법은 README '4. 맵 만들기' 참조.
+*.db
+*.db-journal
+*.pgm
+*.bag
+rosbag2_*/
+
+# --- Python ---
+__pycache__/
+*.py[cod]
+*.egg-info/
+.venv/
+venv/
+
+# --- 에디터 / OS ---
+.vscode/
+.idea/
+*.swp
+.DS_Store
+
+# --- 외부 에셋 (배포판에서 직접 받으세요, README '0. 사전 준비') ---
+assets/

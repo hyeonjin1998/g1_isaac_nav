@@ -1,0 +1,8 @@
+# RTAB-Map DB 는 수백 MB 라 저장소에 커밋하지 않습니다 (sim_warehouse.db = 439MB).
+# 재생성 방법:
+#   터미널 A: python isaac/g1_nav_sim.py --scene full_warehouse --camera --lidar
+#   터미널 B: ros2 launch g1_localization g1_mapping.launch.py
+#   터미널 C: python3 scripts/drive_patrol.py --straight 5 --turn 4 --loops 2
+*.db
+*.db-journal
+gridchk.*
