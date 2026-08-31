@@ -16,7 +16,7 @@ fi
 ISAAC_VENV="${ISAAC_VENV:-$HOME/IsaacLab/env_isaaclab}"
 if [ ! -f "${ISAAC_VENV}/bin/activate" ]; then
   echo "[isaac_env] 오류: venv 를 찾을 수 없습니다: ${ISAAC_VENV}"
-  echo "[isaac_env]       ISAAC_VENV 로 Isaac Sim venv 경로를 지정하세요 (README '1. Isaac Sim')."
+  echo "[isaac_env]       ISAAC_VENV 로 Isaac Sim venv 경로를 지정하세요 (README '2. Isaac Sim 5.1.0 설치')."
   return 1 2>/dev/null || exit 1
 fi
 source "${ISAAC_VENV}/bin/activate"

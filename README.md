@@ -1,374 +1,194 @@
 # 05_Arch — Unitree G1 Localization & Navigation
 
-Isaac Sim 안의 Unitree G1(29DOF)에 RTAB-Map 측위와 Nav2 자율주행을 붙인 스택.
-시뮬에서 완성한 뒤 토픽/프레임/파라미터를 그대로 실기로 옮기는 것을 목표로 합니다.
+Isaac Sim 안의 Unitree G1(29DOF) 휴머노이드에 **RTAB-Map 측위**와 **Nav2 자율주행**을
+붙인 스택입니다. 시뮬에서 완성한 뒤 그대로 실기로 옮기는 것을 목표로 합니다.
 
-| Phase | 내용 | 상태 |
-|---|---|---|
-| 0 | ROS 2 Humble 설치, py3.11↔py3.10 DDS 상호운용 | ✅ |
-| 1 | 보행 정책 이식 (MuJoCo→PhysX), 속도 특성 측정 | ✅ |
-| 2 | ROS 2 I/O (`/cmd_vel`, `/odom`, TF, D435i, MID-360) | ✅ |
-| 3 | RTAB-Map 매핑 (warehouse) | ✅ |
-| 4 | RTAB-Map 측위 (오차 0.118 m) | ✅ |
-| 5 | Nav2 자율주행 | 🔶 주행 성공, 측위 안정성 미해결 |
-
-- 단계별 설계 근거와 실측값: [`docs/plan.md`](docs/plan.md)
-- 환경 함정 모음: [`docs/setup_notes.md`](docs/setup_notes.md)
-- 미포함 외부 에셋: [`THIRD_PARTY.md`](THIRD_PARTY.md)
+현재: 매핑·측위(오차 0.118 m)·자율주행까지 동작. 측위 안정성은 개선 중입니다.
 
 ---
 
-# 설치
+## 준비물
 
-## 요구사항
+| | 필요한 것 |
+|---|---|
+| OS | **Ubuntu 22.04** (ROS 2 Humble 전용, 24.04 불가) |
+| GPU | **NVIDIA RTX 계열** — 라이다를 레이트레이싱으로 시뮬레이션하므로 필수 |
+| 디스크 | 30 GB 이상 |
 
-| | 요구 | 개발 머신 (검증 환경) |
-|---|---|---|
-| OS | **Ubuntu 22.04 (jammy)** — ROS 2 Humble 고정 | Ubuntu 22.04.5 LTS |
-| GPU | **NVIDIA RTX 계열 필수** | RTX 5080 (16 GB) |
-| 드라이버 | 관련 Isaac Sim 5.1 요구사항 충족 | 570.211.01 |
-| 디스크 | 30 GB+ (Isaac 에셋 캐시 + 맵 DB) | — |
-
-RTX가 필수인 이유: MID-360 라이다를 **RTX Lidar**로 시뮬레이션하므로 레이트레이싱
-코어가 없으면 포인트클라우드가 나오지 않습니다.
-
-Ubuntu 24.04에서는 동작하지 않습니다 — ROS 2 Humble이 jammy 전용입니다.
+검증 환경: Ubuntu 22.04.5 / RTX 5080 / 드라이버 570.211
 
 ---
 
-## 0. 사전 준비 — G1 USD 모델
+## 설치 — 5단계
 
-**이 저장소에 포함돼 있지 않습니다.** Unitree 배포판에서 받아야 합니다.
-
-```bash
-git clone https://github.com/unitreerobotics/unitree_ros.git
-# 또는 Unitree가 배포하는 unitree_model 패키지
-```
-
-`g1_29dof_rev_1_0.usd` 를 확보한 뒤, 다음 중 아무 방법이나 쓰면 됩니다.
-
-```bash
-# 방법 A — 환경변수 (권장)
-export G1_USD=/path/to/g1_29dof_rev_1_0.usd
-
-# 방법 B — 저장소 안에 배치 (assets/ 는 .gitignore 됨)
-mkdir -p assets/unitree_model/G1/29dof/usd/
-cp -r .../g1_29dof_rev_1_0 assets/unitree_model/G1/29dof/usd/
-
-# 방법 C — 실행할 때마다 지정
-python isaac/g1_nav_sim.py --usd /path/to/g1_29dof_rev_1_0.usd
-```
-
-창고/사무실 환경 USD는 Isaac Sim이 에셋 서버에서 자동으로 받으므로 준비 불필요합니다.
-
----
-
-## 1. 저장소 클론
+### 1. 이 저장소 받기
 
 ```bash
 git clone <이 저장소 URL> ~/05_Arch
 cd ~/05_Arch
 ```
 
-경로는 어디든 상관없습니다. 스크립트가 자기 위치에서 저장소 루트를 찾습니다.
+경로는 어디든 됩니다. 스크립트가 알아서 찾습니다.
 
----
+### 2. Isaac Sim 5.1.0 설치
 
-## 2. Isaac Sim 5.1.0 (프로세스 A, Python 3.11)
+Python 3.11 가상환경에 pip로 설치합니다.
+
+> 공식 안내: [설치 방법](https://docs.isaacsim.omniverse.nvidia.com/latest/installation/install_python.html) ·
+> [시스템 요구사항](https://docs.isaacsim.omniverse.nvidia.com/latest/installation/requirements.html)
 
 ```bash
 python3.11 -m venv ~/isaacsim_venv
 source ~/isaacsim_venv/bin/activate
 pip install --upgrade pip
 pip install 'isaacsim[all,extscache]==5.1.0' --extra-index-url https://pypi.nvidia.com
-
-# 이 프로젝트가 추가로 쓰는 것 (ONNX 정책 로드)
-pip install onnx pyyaml
+pip install onnx pyyaml          # 이 프로젝트가 추가로 쓰는 것
 deactivate
 ```
 
-venv 경로가 `~/IsaacLab/env_isaaclab` 가 아니면 알려줘야 합니다:
+가상환경을 `~/isaacsim_venv` 가 아닌 곳에 만들었다면 위치를 알려주세요:
 
 ```bash
-export ISAAC_VENV=~/isaacsim_venv     # ~/.bashrc 에 넣어두면 편합니다
+echo 'export ISAAC_VENV=~/내가/만든/venv' >> ~/.bashrc
 ```
 
-확인:
+### 3. ROS 2 Humble + Nav2 + RTAB-Map 설치
+
+준비된 스크립트를 쓰면 한 번에 끝납니다. (sudo 비밀번호를 물어봅니다)
 
 ```bash
-source scripts/isaac_env.sh
-python -c "import isaacsim, rclpy; print(rclpy.__file__)"
-# .../isaacsim/exts/isaacsim.ros2.bridge/humble/rclpy/rclpy/__init__.py 가 나와야 합니다
-deactivate
+bash scripts/install_ros2.sh
 ```
 
-> 첫 실행은 셰이더 컴파일로 **10분 이상** 걸립니다. 멈춘 게 아닙니다.
+직접 하고 싶거나 문제가 생기면 각 공식 문서를 참고하세요.
 
----
+> [ROS 2 Humble 설치](https://docs.ros.org/en/humble/Installation/Ubuntu-Install-Debs.html) ·
+> [Nav2](https://docs.nav2.org/) · [RTAB-Map ROS](https://github.com/introlab/rtabmap_ros)
 
-## 3. ROS 2 Humble + Nav2 + RTAB-Map (프로세스 B, Python 3.10)
+### 4. G1 로봇 모델 받기
+
+로봇 3D 모델은 **Unitree가 따로 배포**하므로 이 저장소에 없습니다.
+Hugging Face에서 받으세요.
+
+> [unitreerobotics/unitree_model](https://huggingface.co/datasets/unitreerobotics/unitree_model)
 
 ```bash
-bash scripts/install_ros2.sh      # sudo 비밀번호를 물어봅니다
+git clone https://huggingface.co/datasets/unitreerobotics/unitree_model ~/unitree_model
 ```
 
-`ros-humble-desktop`, `navigation2`, `rtabmap-ros`, `rmw-fastrtps-cpp`,
-`colcon` 을 설치합니다. 이미 ROS 2가 있으면 누락분만 채우고 끝납니다.
+받은 뒤 위치를 알려줍니다:
 
----
+```bash
+echo 'export G1_USD=~/unitree_model/G1/29dof/usd/g1_29dof_rev_1_0/g1_29dof_rev_1_0.usd' >> ~/.bashrc
+source ~/.bashrc
+```
 
-## 4. 워크스페이스 빌드
+창고·사무실 같은 배경 환경은 Isaac Sim이 알아서 받아오므로 준비할 게 없습니다.
+
+### 5. 워크스페이스 빌드
 
 ```bash
 source /opt/ros/humble/setup.bash
-cd ros2_ws
-colcon build --symlink-install
-cd ..
+cd ros2_ws && colcon build --symlink-install && cd ..
 ```
 
-> **`--symlink-install` 를 반드시 쓰세요.** 이게 없으면 colcon이 `maps/` 디렉터리를
-> `install/` 로 **복사**합니다. 맵 DB가 쌓이면 GB 단위가 그대로 복제됩니다.
+> `--symlink-install` 을 꼭 붙이세요. 없으면 맵 파일(GB 단위)까지 통째로 복사됩니다.
 
 ---
 
-## 5. 설치 검증
+## 잘 됐는지 확인
 
-아래를 순서대로 통과하면 세팅이 끝난 겁니다. 각 단계는 독립 실행 가능합니다.
+위에서 아래로 순서대로 해보세요. **막히면 그 단계에서 멈추고 해결**하는 게 빠릅니다.
 
-### 5-1. 두 Python 사이의 DDS 통신
+| | 터미널 A (Isaac) | 터미널 B (ROS 2) | 통과 기준 |
+|---|---|---|---|
+| 1 | `python scripts/dds_ping.py pub` | `python3 scripts/dds_ping.py sub` | B에 메시지가 뜬다 |
+| 2 | `python isaac/g1_walk_test.py` | — | 로봇이 안 넘어지고 걷는다 |
+| 3 | `python isaac/check_lidar_profile.py` | — | `PASS` |
+| 4 | `python isaac/g1_nav_sim.py --scene simple_room --camera --lidar` | `python3 scripts/check_lidar_topic.py` | `PASS` |
 
-```bash
-# 터미널 A
-source scripts/isaac_env.sh
-python scripts/dds_ping.py pub
-
-# 터미널 B
-source scripts/ros_env.sh
-python3 scripts/dds_ping.py sub
-```
-
-B에서 메시지가 보이면 통과. **안 보이면 여기서 멈추고 해결하세요** — 이후 모든 게
-이 통신 위에 있습니다. `RMW_IMPLEMENTATION` / `ROS_DOMAIN_ID` / `ROS_LOCALHOST_ONLY`
-불일치가 대부분의 원인이고, 토픽은 조용히 안 보일 뿐 오류가 나지 않습니다.
-
-### 5-2. 보행 정책 (ROS 없이)
+각 터미널은 먼저 환경을 불러와야 합니다.
 
 ```bash
-source scripts/isaac_env.sh
-python isaac/g1_walk_test.py
+source scripts/isaac_env.sh     # 터미널 A 용
+source scripts/ros_env.sh       # 터미널 B 용
 ```
 
-G1이 넘어지지 않고 걸으면 통과.
-
-### 5-3. 라이다 프로파일
-
-```bash
-source scripts/isaac_env.sh
-python isaac/check_lidar_profile.py
-```
-
-`PASS` — 방위각 360°, 고도 −7~+52°.
-
-### 5-4. 센서 토픽
-
-```bash
-# 터미널 A
-source scripts/isaac_env.sh
-python isaac/g1_nav_sim.py --scene simple_room --camera --lidar
-
-# 터미널 B
-source scripts/ros_env.sh
-python3 scripts/check_lidar_topic.py
-```
-
-`PASS` — 10 Hz, 메시지당 ≥1000점, 방위각 ≥300°.
-
-### 5-5. 전체 스택
+마지막으로 전체를 한 번에:
 
 ```bash
 bash scripts/demo.sh manual
 ```
 
-RViz가 뜨고 `/cmd_vel` 로 로봇이 움직이면 설치 완료입니다.
+RViz가 뜨고 로봇이 움직이면 설치 완료입니다.
+
+> Isaac Sim 첫 실행은 셰이더 컴파일 때문에 **10분 이상** 걸립니다. 멈춘 게 아닙니다.
 
 ---
 
-# 맵 만들기
+## 실행
 
-맵 DB는 저장소에 없습니다(파일당 수백 MB~GB). 직접 만듭니다.
+```bash
+bash scripts/demo.sh guided   # 맵을 만들며 직접 몰기 (맵 작성은 이걸 권장)
+bash scripts/demo.sh          # 저장된 맵으로 측위 + 순찰
+bash scripts/demo.sh nav      # 저장된 맵으로 자율주행
+bash scripts/demo.sh explore  # 자율 탐사로 맵 작성
+bash scripts/demo.sh manual   # 직접 조종
+```
+
+배경 바꾸기: `SCENE=simple_room bash scripts/demo.sh guided`
+(`full_warehouse` 기본, 그 외 `warehouse` / `simple_room` / `office`)
+
+### 맵 만들기
+
+맵 파일은 개당 수백 MB~GB라 저장소에 없습니다. 직접 만드세요.
 
 ```bash
 bash scripts/demo.sh guided
 ```
 
-RViz에서 **2D Goal Pose** 로 가고 싶은 지점을 찍으면 로봇이 그리로 이동하면서
-맵을 넓힙니다. 자율 탐사(`explore`)보다 이쪽이 결과가 안정적입니다.
-
-만들어진 DB는 `ros2_ws/src/g1_localization/maps/` 에 저장됩니다. 다 만들었으면
-품질을 확인하세요:
+RViz에서 **2D Goal Pose** 로 가고 싶은 곳을 찍으면 로봇이 이동하면서 맵을 넓힙니다.
+다 만든 뒤 품질 확인:
 
 ```bash
 source scripts/ros_env.sh
 python3 scripts/check_map_quality.py ros2_ws/src/g1_localization/maps/<이름>.db
 ```
 
-`장소 오검출 0` 이고 `장애물 셀 ≥50%` 면 쓸 만한 맵입니다.
-
-> **주의 — 창고 씬의 평행 통로.** full_warehouse의 통로들은 14.8~15.1 m 간격으로
-> 시각·기하 양쪽 모두 동일합니다. RTAB-Map이 이걸 같은 장소로 오인하면 맵 전체가
-> 접힙니다. 현재 매핑 설정은 `Rtabmap/LoopThr: 2.0` 으로 외형 기반 루프 클로저를
-> 전부 기각하고 근접 클로저만 쓰도록 돼 있습니다. 자세한 내용은
-> [`docs/plan.md`](docs/plan.md) 참조.
-
 ---
 
-# 실행
+## 딱 하나만 기억할 것 — 터미널 두 개를 섞지 마세요
 
-```bash
-bash scripts/demo.sh          # 저장된 맵으로 측위 + RViz + 순찰 주행
-bash scripts/demo.sh guided   # 맵을 만들며 2D Goal Pose 로 직접 몰기  ← 맵 작성 권장
-bash scripts/demo.sh mapping  # 맵을 새로 만들며 관찰 (순찰 주행)
-bash scripts/demo.sh explore  # 자율 탐사 (프론티어 자동 선정)
-bash scripts/demo.sh nav      # 저장된 맵으로 자율주행 (맵은 자라지 않음)
-bash scripts/demo.sh manual   # 직접 /cmd_vel 로 조종
-```
+Isaac Sim은 Python 3.11, ROS 2는 Python 3.10을 씁니다. **한 터미널에서 둘 다
+불러오면 깨집니다.** 두 프로그램은 네트워크(DDS)로만 대화합니다.
 
-씬 변경:
-
-```bash
-SCENE=warehouse   bash scripts/demo.sh guided   # 선반 적은 창고
-SCENE=simple_room bash scripts/demo.sh guided   # 작은 실내 (가장 빠름)
-SCENE=office      bash scripts/demo.sh guided   # 사무실 (통로 많음)
-```
-
-## 수동 실행 (3 터미널)
-
-```bash
-# A: 시뮬
-source scripts/isaac_env.sh
-python isaac/g1_nav_sim.py --scene full_warehouse --camera --lidar
-
-# B: 측위
-source scripts/ros_env.sh
-ros2 launch g1_localization g1_localization.launch.py \
-    database_path:=$PWD/ros2_ws/src/g1_localization/maps/<이름>.db
-
-# C: 내비게이션
-source scripts/ros_env.sh
-ros2 launch g1_navigation g1_navigation.launch.py
-python3 scripts/bootstrap_localization.py   # map 프레임 확보 (필수)
-```
-
----
-
-# 두 개의 프로세스, 두 개의 Python
-
-이 프로젝트의 핵심 제약입니다. **절대 섞지 마세요.**
-
-| | 프로세스 A (Isaac Sim) | 프로세스 B (ROS 2) |
+| | 터미널 A | 터미널 B |
 |---|---|---|
-| 환경 | `source scripts/isaac_env.sh` | `source scripts/ros_env.sh` |
-| Python | 3.11 (venv) | 3.10 (시스템) |
-| rclpy | Isaac 번들 (cp311) | `/opt/ros/humble` (cp310) |
-| `/opt/ros/humble/setup.bash` | **source 금지** | 필수 |
-| venv activate | 필수 | **금지** |
+| 불러올 것 | `source scripts/isaac_env.sh` | `source scripts/ros_env.sh` |
+| 쓰는 것 | Isaac Sim | Nav2 / RTAB-Map / RViz |
+| 금지 | ROS 2 setup.bash | Isaac 가상환경 |
 
-두 프로세스는 DDS 로만 통신합니다. 아래 세 값이 양쪽에서 같아야 하고,
-다르면 **오류 없이 토픽만 안 보입니다**.
-
-```
-RMW_IMPLEMENTATION=rmw_fastrtps_cpp
-ROS_DOMAIN_ID=0
-ROS_LOCALHOST_ONLY=1
-```
-
-두 env 스크립트 모두 반대쪽 환경이 감지되면 경고를 냅니다. 경고가 보이면
-새 터미널에서 다시 시작하세요.
-
-## 환경변수 정리
-
-| 변수 | 기본값 | 언제 필요한가 |
-|---|---|---|
-| `ISAAC_VENV` | `~/IsaacLab/env_isaaclab` | Isaac Sim venv 경로가 다를 때 |
-| `G1_USD` | 후보 경로 자동 탐색 | G1 USD 위치를 못 찾을 때 |
-| `G1_ARCH_ROOT` | `ros_env.sh` 가 자동 설정 | 보통 불필요 |
-| `SCENE` | `full_warehouse` | `demo.sh` 씬 변경 |
+잘못 섞으면 두 스크립트가 경고를 냅니다. 경고가 보이면 새 터미널에서 시작하세요.
+**증상은 대개 "오류는 없는데 토픽이 안 보임"** 입니다.
 
 ---
 
-# 구성
+## 더 읽을거리
 
-```
-isaac/                       프로세스 A (Python 3.11)
-├── g1_nav_sim.py            메인 — 씬 + 정책 + ROS I/O
-├── g1_policy.py             ONNX 정책 런타임 (시뮬 비의존)
-├── g1_walk_test.py          Phase 1 격리 검증
-├── check_lidar_profile.py   RTX 라이다 프로파일 검증
-├── sensors.py               G1 공식 URDF 실장 위치 (D435i, MID-360, IMU)
-├── ros_io.py                /cmd_vel 구독, /odom·TF 발행, 보행개시 shim
-├── ros_camera.py            D435i RGB-D + PointCloud2
-├── ros_lidar.py             MID-360 (Livox 근사 프로파일)
-├── lidar_configs/           RTX 라이다 JSON 프로파일
-└── policy/velocity_v0/      보행 정책 가중치 (THIRD_PARTY.md 참조)
-
-ros2_ws/src/                 프로세스 B (Python 3.10)
-├── g1_localization/         RTAB-Map 매핑/측위 launch + 맵 DB(미커밋)
-├── g1_navigation/           Nav2 파라미터 + 커스텀 BT
-└── g1_bringup/              RViz 설정
-
-scripts/                     환경·실행·검증
-├── isaac_env.sh / ros_env.sh    두 환경 (섞지 말 것)
-├── install_ros2.sh              ROS 2 설치
-├── demo.sh                      통합 실행
-├── dds_ping.py                  py3.11↔3.10 통신 검증
-├── check_lidar_topic.py         발행 클라우드 검증
-├── check_map_quality.py         맵 DB 품질 검사
-├── bootstrap_localization.py    map 프레임 확보
-├── stuck_escape.py              고착 탈출 (후진)
-└── explore_frontier.py          자율 탐사
-```
-
----
-
-# 보행 정책의 제약 (Nav2 설정 근거)
-
-Phase 1 실측. 바퀴 로봇 기본값을 쓰면 로봇이 멈춰 있거나 넘어집니다.
-
-| 축 | 무반응 | 최초 반응 | 비고 |
-|---|---|---|---|
-| `vx` 전진 | ~0.3 | **0.5** | 추종 오차 1.4% — 우수 |
-| `vx` 후진 | −0.3 | −0.4 | 29% 오차 → 탈출 시에만 사용 |
-| `vy` 측방 | ~0.45 | **0.5** | 학습 최대치 → 비홀로노믹 취급 |
-| `wz` 제자리 회전 | ~0.8 | **1.0** | 38% 오차 → **금지** |
-| `wz` 보행 중 | — | 0.4 | 10% 오차 — 우수 |
-
-데드밴드는 축별이 아니라 **보행 개시**에 걸립니다. 일단 걷기 시작하면 작은 명령도
-잘 추종합니다.
-
-→ 컨트롤러는 **RPP(원호 주행)**, `use_rotate_to_heading: false`,
-`yaw_goal_tolerance: 3.15`(방위 무시), spin 복구 비활성화.
-
----
-
-# 알려진 미해결 이슈
-
-**RTAB-Map 측위가 끊김** — 로봇이 정지하거나 맵 밖으로 나가면 `map→odom` 발행이
-멎어 Nav2가 계획을 못 합니다. `scripts/bootstrap_localization.py` 로 대개
-복구되지만 항상은 아닙니다.
-
-관련해서 `g1_localization.launch.py` 의 `RGBD/MaxOdomCacheSize: 0` 는
-순간이동 방지 검사를 끈 상태입니다. 부트스트랩 교착을 피하려는 선택이지만,
-평행 통로에서 오검출이 나면 로봇이 15 m 튈 수 있습니다. 대응 후보는
-[`docs/plan.md`](docs/plan.md) Phase 5 절 참조.
-
-# 문제 해결
-
-| 증상 | 원인 / 조치 |
+| 문서 | 내용 |
 |---|---|
-| 토픽이 조용히 안 보임 | 두 셸의 `RMW_IMPLEMENTATION`/`ROS_DOMAIN_ID`/`ROS_LOCALHOST_ONLY` 불일치. `scripts/dds_ping.py` 로 격리 |
-| `import rclpy` 실패 (venv) | 그 셸에서 `/opt/ros/humble/setup.bash` 를 source 했음. 새 터미널에서 시작 |
-| ROS 노드가 conda python을 잡음 | `ros_env.sh` 가 PATH에서 conda를 밀어냅니다. 경고 메시지 확인 |
-| G1 USD 를 못 찾음 | `export G1_USD=/path/to/g1_29dof_rev_1_0.usd` |
-| 라이다 포인트 0개 | RTX GPU 아님, 또는 라이다 프로파일 미적용. `check_lidar_profile.py` |
-| 맵이 커지면 접힘 | 평행 통로 오검출. 위 '맵 만들기' 주의 참조 |
-| `colcon build` 가 매우 느림/큼 | `--symlink-install` 누락 → `maps/` 복사 중 |
+| [`docs/plan.md`](docs/plan.md) | 단계별 설계 근거와 실측값 — 왜 이 파라미터인지 |
+| [`docs/setup_notes.md`](docs/setup_notes.md) | 환경 설정 중 겪은 함정과 해결 |
+| [`THIRD_PARTY.md`](THIRD_PARTY.md) | 미포함 외부 에셋과 출처 |
+
+문제가 생기면 `docs/setup_notes.md` 를 먼저 보세요. 자주 겪는 것들이 정리돼 있습니다.
+
+### 알아두면 좋은 것 둘
+
+**로봇이 바퀴가 아닙니다.** 제자리 회전은 오차 38%라 Nav2에서 막아뒀고, 후진도
+탈출할 때만 씁니다. 그래서 컨트롤러가 원호 주행(RPP)입니다. 자세한 실측값은
+`docs/plan.md` 참조.
+
+**창고 맵이 가끔 접힙니다.** full_warehouse의 통로들이 15 m 간격으로 똑같이 생겨서
+RTAB-Map이 같은 곳으로 착각합니다. 현재 설정으로 억제해 뒀지만 완전히 해결되진
+않았습니다.

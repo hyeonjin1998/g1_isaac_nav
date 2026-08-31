@@ -29,7 +29,7 @@ import os
 from pathlib import Path
 
 # G1 USD 는 Unitree 배포 에셋이라 이 저장소에 포함돼 있지 않습니다.
-# 다른 머신에서는 G1_USD 환경변수나 --usd 로 지정하세요 (README '0. 사전 준비').
+# 다른 머신에서는 G1_USD 환경변수나 --usd 로 지정하세요 (README '4. G1 로봇 모델 받기').
 _G1_USD_REL = "unitree_model/G1/29dof/usd/g1_29dof_rev_1_0/g1_29dof_rev_1_0.usd"
 _G1_USD_CANDIDATES = (
     Path(__file__).resolve().parents[1] / "assets" / _G1_USD_REL,  # 저장소 내부에 둔 경우
